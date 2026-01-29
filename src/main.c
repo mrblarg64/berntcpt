@@ -187,6 +187,7 @@ static inline void setupsocket()
 	#if (WINVER >= 0x0600)
 	QOS_VERSION qosv;
 	HANDLE qosh;
+	DWORD dscpval = 1; //lower effort DSCP, without the shift for ECN bits
 	#endif
 	#else
 	int ssopt;
@@ -316,7 +317,28 @@ static inline void setupsocket()
 				#if ((defined(_WIN32)) && (WINVER >= 0x0600))
 				if (!QOSAddSocketToFlow(qosh, sock, NULL, QOSTrafficTypeBackground, QOS_NON_ADAPTIVE_FLOW, &qosfid))
 				{
-					SOCKERROR("QOSAddSocketToFlow()");
+					myerrno = GetLastError();
+					printf(NEWLINE "QOSAddSocketToFlow() failed ecode 0x%lx" NEWLINE, myerrno);
+					FASTEXIT(myerrno);
+				}
+				if (!QOSSetFlow(qosh, qosfid, QOSSetOutgoingDSCPValue, sizeof(DWORD), &dscpval, 0, NULL))
+				{
+					myerrno = GetLastError();
+					switch (myerrno)
+					{
+					case ERROR_ACCESS_DISABLED_BY_POLICY:
+						FASTPRINT(NEWLINE "QOSSetFlow(QOSSetOutgoingDSCPValue) Failed to set DSCP LE. (ERROR_ACCESS_DISABLED_BY_POLICY) continuing..." NEWLINE);
+						break;
+					case ERROR_ACCESS_DENIED:
+						FASTPRINT(NEWLINE "QOSSetFlow(QOSSetOutgoingDSCPValue) Failed to set DSCP LE. You do not have sufficient privileges. continuing..." NEWLINE);
+						break;
+					case ERROR_INVALID_PARAMETER:
+						FASTPRINT(NEWLINE "QOSSetFlow(QOSSetOutgoingDSCPValue) Failed to set DSCP LE. This version of windows does not support that functionality (ERROR_INVALID_PARAMETER, works on Windows 7 and newer). continuing..." NEWLINE);
+						break;
+					default:
+						printf(NEWLINE "QOSSetFlow(QOSSetOutgoingDSCPValue) Failed ecode 0x%lx" NEWLINE, myerrno);
+						FASTEXIT(myerrno);
+					}
 				}
 				#endif
 				if (shutdown(sock, sdhow))
@@ -340,7 +362,28 @@ static inline void setupsocket()
 		#if ((defined(_WIN32)) && (WINVER >= 0x0600))
 		if (!QOSAddSocketToFlow(qosh, sock, NULL, QOSTrafficTypeBackground, QOS_NON_ADAPTIVE_FLOW, &qosfid))
 		{
-			SOCKERROR("QOSAddSocketToFlow()");
+			myerrno = GetLastError();
+			printf(NEWLINE "QOSAddSocketToFlow() failed ecode 0x%lx" NEWLINE, myerrno);
+			FASTEXIT(myerrno);
+		}
+		if (!QOSSetFlow(qosh, qosfid, QOSSetOutgoingDSCPValue, sizeof(DWORD), &dscpval, 0, NULL))
+		{
+			myerrno = GetLastError();
+			switch (myerrno)
+			{
+			case ERROR_ACCESS_DISABLED_BY_POLICY:
+				FASTPRINT(NEWLINE "QOSSetFlow(QOSSetOutgoingDSCPValue) Failed to set DSCP LE. (ERROR_ACCESS_DISABLED_BY_POLICY) continuing..." NEWLINE);
+				break;
+			case ERROR_ACCESS_DENIED:
+				FASTPRINT(NEWLINE "QOSSetFlow(QOSSetOutgoingDSCPValue) Failed to set DSCP LE. You do not have sufficient privileges. continuing..." NEWLINE);
+				break;
+			case ERROR_INVALID_PARAMETER:
+				FASTPRINT(NEWLINE "QOSSetFlow(QOSSetOutgoingDSCPValue) Failed to set DSCP LE. This version of windows does not support that functionality (ERROR_INVALID_PARAMETER, works on Windows 7 and newer). continuing..." NEWLINE);
+				break;
+			default:
+				printf(NEWLINE "QOSSetFlow(QOSSetOutgoingDSCPValue) Failed ecode 0x%lx" NEWLINE, myerrno);
+				FASTEXIT(myerrno);
+			}
 		}
 		#endif
 		if (shutdown(sock, sdhow))
@@ -808,6 +851,8 @@ static inline void sfile()
 	LARGE_INTEGER li;
 	//#else
 	//ERRNO_T myerrno;
+	#else
+	ssize_t retval;
 	#endif
 	ERRNO_T myerrno;
 
@@ -859,9 +904,18 @@ static inline void sfile()
 			SOCKERROR("TransmitFile()");
 		}
 		#else
-		if (sendfile(sock, fd, NULL, cursend) != cursend)
+	sfagain:
+		retval = sendfile(sock, fd, NULL, cursend);
+		if (retval != cursend)
 		{
-			SOCKERROR("sendfile()");
+			if (errno)
+			{
+				SOCKERROR("sendfile()");
+			}
+			//try again because some data sent before the error
+			//was raised on the socket
+			cursend -= retval;
+			goto sfagain;
 		}
 		#endif
 		totsent += cursend;

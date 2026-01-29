@@ -10,7 +10,7 @@ LDFLAGS += -march=native -Ofast -pipe -flto -fuse-linker-plugin
 #LDFLAGS += -mconsole -Ofast -pipe -lqwave -lws2_32 -lmswsock
 #######################
 ##CFLAGS += -DWINVER=0x0502 -D_WIN32_WINNT=0x0502 -mconsole -Wall -Wextra -Ofast -pipe
-##LDFLAGS += -mconsole -Ofast -pipe -lqwave -lws2_32 -lmswsock -lntdll
+##LDFLAGS += -mconsole -Ofast -pipe -lws2_32 -lmswsock -lntdll
 
 SRCS = $(wildcard src/*.c)
 OBJS = $(SRCS:.c=.o)

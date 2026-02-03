@@ -122,7 +122,7 @@ const struct sigaction siga = {.sa_handler = SIG_IGN};
 #include <stdint.h>
 #include <stdio.h>
 
-#define BUFFER_SIZE 40960000
+#define BUFFER_SIZE 4096000
 
 #define FLAG_TCP_SERVER 0b1
 #define FLAG_SENDER 0b100
@@ -782,7 +782,7 @@ static inline void rfile(const char *const fname)
 	#endif
 	while (1)
 	{
-		gnutlsretval = recv(sock, buf, BUFFER_SIZE, 0);
+		gnutlsretval = recv(sock, buf, BUFFER_SIZE, MSG_WAITALL);
 		if (gnutlsretval < 0)
 		{
 			SOCKERROR("recv()");

@@ -4,6 +4,7 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 
+
 #include <windows.h>
 //#include <winsock2.h>
 #include <mswsock.h>
@@ -12,14 +13,12 @@
 #include <qos2.h>
 #else
 #include <mstcpip.h>
-#include <ntdef.h>
-#include <ntstatus.h>
 #endif
 
 #define ERRNO_T DWORD
 #define SOCKET_T SOCKET
 #define NEWLINE "\r\n"
-#define U64_PF "%llu"
+#define U64_PF "%" PRIu64
 #define SSO_CAST (const char*)
 #define B_SHUT_RD SD_RECEIVE
 #define B_SHUT_WR SD_SEND
@@ -79,12 +78,13 @@ WSADATA wsd;
 #include <unistd.h>
 #include <locale.h>
 #include <sched.h>
+#include <linux/tcp.h>
 #include <errno.h>
 
 #define ERRNO_T int
 #define SOCKET_T int
 #define NEWLINE "\n"
-#define U64_PF "%'lu"
+#define U64_PF "%'" PRIu64
 #define SSO_CAST (void*)
 #define B_SHUT_RD SHUT_RD
 #define B_SHUT_WR SHUT_WR
@@ -120,6 +120,7 @@ const struct sigaction siga = {.sa_handler = SIG_IGN};
 
 #include <stdlib.h>
 #include <stdint.h>
+#include <inttypes.h>
 #include <stdio.h>
 
 #define BUFFER_SIZE 4096000
@@ -171,6 +172,40 @@ static inline void setupsockstorage(struct sockaddr_storage *sas, uint32_t i, ui
 	#endif
 
 	return;
+}
+
+static inline void printtcpinfo()
+{
+	#ifdef _WIN32
+	#if NTDDI_VERSION >= NTDDI_WIN10_RS5
+	DWORD version = 1;
+	TCP_INFO_v1 tcpi;
+	DWORD returned;
+	int wsaerrno;
+
+	if (WSAIoctl(sock, SIO_TCP_INFO, &version, sizeof(DWORD), &tcpi, sizeof(TCP_INFO_v1), &returned, NULL, NULL))
+	{
+		SOCKERROR("WSAIoctl(SIO_TCP_INFO)");
+	}
+
+	printf(NEWLINE "TCP Info" NEWLINE "\t\trtt = %lu" NEWLINE "\t\trtt-min = %lu" NEWLINE "\t\tcwnd = %lu" NEWLINE "\t\trx-bytes = %llu" NEWLINE "\t\ttx-bytes = %llu" NEWLINE "\t\tretrans-bytes = %lu" NEWLINE "\t\tfast-retrans calls = %lu" NEWLINE "\t\tmss = %lu" NEWLINE "\t\treordered-bytes = %lu" NEWLINE "\t\tdup acks recvd = %lu" NEWLINE NEWLINE, tcpi.RttUs, tcpi.MinRttUs, tcpi.Cwnd, tcpi.BytesIn, tcpi.BytesOut, tcpi.BytesRetrans, tcpi.FastRetrans, tcpi.Mss, tcpi.BytesReordered, tcpi.DupAcksIn);
+
+	#endif
+	#else
+	struct tcp_info tcpi;
+	socklen_t optlen;
+	int myerrno;
+
+	optlen = sizeof(struct tcp_info);
+	if (getsockopt(sock, IPPROTO_TCP, TCP_INFO, &tcpi, &optlen))
+	{
+		myerrno = errno;
+		perror("IPPROTO_TCP TCP_INFO getsockopt()");
+		_exit(myerrno);
+	}
+	printf(NEWLINE "TCP Info" NEWLINE "\t\trtt = %'u" NEWLINE "\t\trtt-min = %'u" NEWLINE "\t\trtt-var = %'u" NEWLINE "\t\tcwnd = %'u" NEWLINE "\t\tpacing rate = %'llu" NEWLINE "\t\tmax pacing rate = %'llu" NEWLINE "\t\trx-bytes = %'llu" NEWLINE "\t\ttx-bytes = %'llu" NEWLINE "\t\tnotsent-bytes = %'u" NEWLINE "\t\tsegs out = %'u" NEWLINE "\t\tretrans-pkts = %'u" NEWLINE "\t\tsmss = %u" NEWLINE "\t\trmss = %u" NEWLINE "\t\tpmtu %u" NEWLINE "\t\treorder-events = %'u" NEWLINE NEWLINE, tcpi.tcpi_rtt, tcpi.tcpi_min_rtt, tcpi.tcpi_rttvar, tcpi.tcpi_snd_cwnd, tcpi.tcpi_pacing_rate, tcpi.tcpi_max_pacing_rate, tcpi.tcpi_bytes_received, tcpi.tcpi_bytes_sent, tcpi.tcpi_notsent_bytes, tcpi.tcpi_segs_out, tcpi.tcpi_total_retrans, tcpi.tcpi_snd_mss, tcpi.tcpi_rcv_mss, tcpi.tcpi_pmtu, tcpi.tcpi_reord_seen);
+
+	#endif
 }
 
 static inline void setupsocket()
@@ -441,13 +476,42 @@ static inline void setupfileinput(const char *const fstr)
 	#endif
 }
 
+#ifdef _WIN32
+static inline void setfp(HANDLE fd, DWORD movmeth, uint64_t offset)
+{
+	LARGE_INTEGER li;
+	DWORD myerrno;
+
+	li.QuadPart = offset;
+	#if (WINVER >= 0x0500)
+	if (!SetFilePointerEx(fd, li, NULL, movmeth))
+	{
+		myerrno = GetLastError();
+		printf("SetFilePointerEx() failed ecode 0x%lx" NEWLINE, myerrno);
+		ExitProcess(myerrno);
+	}
+	#else
+	DWORD retval;
+
+	retval = SetFilePointer(fd, li.LowPart, &li.HighPart, movmeth);
+	if (retval == INVALID_SET_FILE_POINTER)
+	{
+		myerrno = GetLastError();
+		if (myerrno != NO_ERROR)
+		{
+			printf("SetFilePointer() failed ecode 0x%lx" NEWLINE, myerrno);
+			ExitProcess(myerrno);
+		}
+	}
+	#endif
+}
+#endif
+
 static inline void setupfileoutput(const char *const fstr)
 {
 	ERRNO_T myerrno;
 
 	#ifdef _WIN32
-	LARGE_INTEGER li;
-
 	fd = CreateFile(fstr, GENERIC_READ | GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_FLAG_SEQUENTIAL_SCAN, NULL);
 	if (fd == INVALID_HANDLE_VALUE)
 	{
@@ -458,28 +522,14 @@ static inline void setupfileoutput(const char *const fstr)
 
 	if (size)
 	{
-		li.QuadPart = size;
-		if (!SetFilePointerEx(fd, li, NULL, FILE_BEGIN))
-		{
-			myerrno = GetLastError();
-			printf("SetFilePointerEx() failed ecode 0x%lx" NEWLINE, myerrno);
-			ExitProcess(myerrno);
-		}
-
+		setfp(fd, FILE_BEGIN, size);
 		if (!SetEndOfFile(fd))
 		{
 			myerrno = GetLastError();
 			printf("SetEndOfFile() failed ecode 0x%lx" NEWLINE, myerrno);
 			ExitProcess(myerrno);
 		}
-
-		li.QuadPart = 0;
-		if (!SetFilePointerEx(fd, li, NULL, FILE_BEGIN))
-		{
-			myerrno = GetLastError();
-			printf("SetFilePointerEx() failed ecode 0x%lx" NEWLINE, myerrno);
-			ExitProcess(myerrno);
-		}
+		setfp(fd, FILE_BEGIN, 0);
 	}
 	#else
 	fd = open(fstr, O_WRONLY | O_EXCL | O_CREAT, 0644);
@@ -507,8 +557,10 @@ static inline void spipe()
 {
 }
 
-static inline void setuppipe()
+static inline void setuppipe(int argc, char *argv[])
 {
+	(void)argc;
+	(void)argv;
 }
 #else
 void setuppipe(int argc, char *argv[])
@@ -528,7 +580,11 @@ void setuppipe(int argc, char *argv[])
 	}
 
 	cargs.flags = CLONE_PIDFD;
+	#if __WORDSIZE == 64
 	cargs.pidfd = (__u64)&pidfd;
+	#else
+	cargs.pidfd = (__u32)&pidfd;
+	#endif
         p = syscall(SYS_clone3, &cargs, sizeof(struct clone_args));
 	if (p < 0)
 	{
@@ -592,7 +648,7 @@ static inline void spipe()
 	char *buf;
 	siginfo_t si;
 	ssize_t retval;
-	ssize_t totsent = 0;
+        uint64_t totsent = 0;
 
 	size = 0;
 	
@@ -628,6 +684,7 @@ static inline void spipe()
 			}
 			printf(" done!" NEWLINE "\tChild exit type: %s" NEWLINE "\tChild exit code: %i" NEWLINE "Sent " U64_PF " bytes" NEWLINE, exittypestr(si.si_code), si.si_status, totsent);
 			close(pidfd);
+			printtcpinfo();
 			CLOSESOCK(sock);
 			_exit(0);
 		}
@@ -677,11 +734,8 @@ static inline void setupaddress(const char *const addr, const char *const ports)
 	char *endptr;
 
 	#if ((defined(_WIN32)) && (WINVER < 0x0600))
-	char *term;
-	NTSTATUS retval;
-
-	retval = RtlIpv4StringToAddress(addr, 1, &term, (IN_ADDR *) &ip);
-	if ((retval != STATUS_SUCCESS) || (*term != 0))
+	ip = inet_addr(addr);
+	if ((ip == INADDR_NONE) || (ip == INADDR_ANY))
 	{
 		FASTPRINT("Failed to parse ipv4 address" NEWLINE);
 	        exitbadusage();
@@ -708,7 +762,7 @@ static inline void rfile(const char *const fname)
 	ERRNO_T myerrno;
 	char *buf;
 	ssize_t gnutlsretval;
-	size_t totrecv = 0;
+        uint64_t totrecv = 0;
 	#ifdef _WIN32
 	//HANDLE fmap;
 	//FILE_DISPOSITION_INFO fdi = 0;
@@ -817,6 +871,7 @@ static inline void rfile(const char *const fname)
 			}
 		}
 	}
+	printtcpinfo();
 	CLOSESOCK(sock);
 	#ifdef _WIN32
 	/* if (!UnmapViewOfFile(buf)) */
@@ -842,19 +897,18 @@ static inline void rfile(const char *const fname)
 
 static inline void sfile()
 {
-	ssize_t totsent = 0;
+        uint64_t totsent = 0;
 	ssize_t cursend;
 	#ifdef _WIN32
 	WSABUF wsab;
 	int wsaerrno;
 	DWORD sentbytes;
-	LARGE_INTEGER li;
 	//#else
 	//ERRNO_T myerrno;
 	#else
 	ssize_t retval;
-	#endif
 	ERRNO_T myerrno;
+	#endif
 
 	#ifdef __ORDER_LITTLE_ENDIAN__
 	size = __builtin_bswap64(size);
@@ -884,7 +938,7 @@ static inline void sfile()
 		//
 		//on windows 11:
 		//and you know what is even stupider?!
-		//Originally I was using SetFilePointerEX(FILE_CURRENT)
+		//Originally I was using SetFilePointerEx(FILE_CURRENT)
 		//after TransmitFile() to move the file pointer,
 		//but that wasn't working, after debugging I discovered that
 		//the first call to TransmitFile() will move the file pointer by
@@ -892,13 +946,7 @@ static inline void sfile()
 		//won't move the pointer. None of this is in the documentation
 		//and as far as I can tell using google I'm the first person to
 		//notice this shit.
-		li.QuadPart = totsent;
-		if (!SetFilePointerEx(fd, li, NULL, FILE_BEGIN))
-		{
-			myerrno = GetLastError();
-			printf("SetFilePointerEx() failed ecode 0x%lx" NEWLINE, myerrno);
-			ExitProcess(myerrno);
-		}
+		setfp(fd, FILE_BEGIN, totsent);
 		if (!TransmitFile(sock, fd, cursend, 0, NULL, NULL, 0))
 		{
 			SOCKERROR("TransmitFile()");
@@ -922,6 +970,7 @@ static inline void sfile()
 	}
 	printf("Completed sending the file, sent all " U64_PF " bytes" NEWLINE, size);
 
+	printtcpinfo();
 	CLOSESOCK(sock);
         CLOSEFILE(fd);
 }

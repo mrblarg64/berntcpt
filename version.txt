@@ -1,1 +1,1 @@
-1.4 - 2026-02-25 - Print tcp info at end of transfer, work towards supporting older versions of Windows.
+1.5 - 2026-03-08 - Fix endian detection.

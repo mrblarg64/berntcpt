@@ -129,7 +129,7 @@ const struct sigaction siga = {.sa_handler = SIG_IGN};
 #define FLAG_SENDER 0b100
 #define FLAG_PIPE 0b1000
 
-#ifdef __ORDER_LITTLE_ENDIAN__
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 #define PIPE_STR 0x002d
 #else
 #define PIPE_STR 0x2d00
@@ -165,7 +165,7 @@ static inline void setupsockstorage(struct sockaddr_storage *sas, uint32_t i, ui
 {
 	((struct sockaddr_in*)sas)->sin_family = AF_INET;
 	((struct sockaddr_in*)sas)->sin_addr.s_addr = i;
-	#ifdef __ORDER_LITTLE_ENDIAN__
+	#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 	((struct sockaddr_in*)sas)->sin_port = __builtin_bswap16(p);
 	#else
 	((struct sockaddr_in*)sas)->sin_port = p;
@@ -774,7 +774,7 @@ static inline void rfile(const char *const fname)
 	{
 		SOCKERROR("recv()");
 	}
-	#ifdef __ORDER_LITTLE_ENDIAN__
+	#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 	size = __builtin_bswap64(size);
 	#endif
 
@@ -910,12 +910,12 @@ static inline void sfile()
 	ERRNO_T myerrno;
 	#endif
 
-	#ifdef __ORDER_LITTLE_ENDIAN__
+	#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 	size = __builtin_bswap64(size);
 	#endif
 	SEND_MSG_MORE(&size, sizeof(uint64_t));
 	
-	#ifdef __ORDER_LITTLE_ENDIAN__
+	#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 	size = __builtin_bswap64(size);
 	#endif
 

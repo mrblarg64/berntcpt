@@ -97,12 +97,19 @@ perror(str);\
 _exit(myerrno);\
 } while (0)
 
-#define SEND_MSG_MORE(buf, size) do {\
-if (send(sock, buf, size, MSG_MORE ) != sizeof(uint64_t))\
-{\
-	SOCKERROR("send()");\
-}\
-} while (0)
+#define SEND_MSG_MORE(buf, size) do {					\
+	smsgmoreagain:							\
+		if (send(sock, buf, size, MSG_MORE ) != sizeof(uint64_t)) \
+		{							\
+			if (errno)					\
+			{						\
+				SOCKERROR("send()");			\
+			}						\
+			/*try again because some data sent before the error*/ \
+			/*was raised on the socket*/			\
+			goto smsgmoreagain;				\
+		}							\
+	} while (0)
 
 #define CLOSESOCK(fd) (close(fd))
 
@@ -177,13 +184,13 @@ static inline void setupsockstorage(struct sockaddr_storage *sas, uint32_t i, ui
 static inline void printtcpinfo()
 {
 	#ifdef _WIN32
-	#if NTDDI_VERSION >= NTDDI_WIN10_RS5
-	DWORD version = 1;
-	TCP_INFO_v1 tcpi;
+	#if NTDDI_VERSION >= NTDDI_WIN10_RS2
+	DWORD version = 0;
+	TCP_INFO_v0 tcpi;
 	DWORD returned;
 	int wsaerrno;
 
-	if (WSAIoctl(sock, SIO_TCP_INFO, &version, sizeof(DWORD), &tcpi, sizeof(TCP_INFO_v1), &returned, NULL, NULL))
+	if (WSAIoctl(sock, SIO_TCP_INFO, &version, sizeof(DWORD), &tcpi, sizeof(TCP_INFO_v0), &returned, NULL, NULL))
 	{
 		SOCKERROR("WSAIoctl(SIO_TCP_INFO)");
 	}
@@ -651,10 +658,17 @@ static inline void spipe()
         uint64_t totsent = 0;
 
 	size = 0;
-	
+
+spipesizeagain:
 	if (send(sock, &size, sizeof(uint64_t), MSG_MORE ) != sizeof(uint64_t))
 	{
-		SOCKERROR("send()");
+		if (errno)
+		{
+			SOCKERROR("send()");
+		}
+		//try again because some data sent before the error
+		//was raised on the socket
+		goto spipesizeagain;
 	}
 
 	buf = mmap(NULL, BUFFER_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -688,9 +702,18 @@ static inline void spipe()
 			CLOSESOCK(sock);
 			_exit(0);
 		}
+	spipedataagain:
 		if (send(sock, buf, retval, 0) != retval)
 		{
-			SOCKERROR("send()");
+			{
+				if (errno)
+				{
+					SOCKERROR("send()");
+				}
+				//try again because some data sent before the error
+				//was raised on the socket
+				goto spipedataagain;
+			}
 		}
 		totsent += retval;
 	}
@@ -770,9 +793,17 @@ static inline void rfile(const char *const fname)
 	int wsaerrno;
 	#endif
 
-	if (recv(sock, (char *) &size, sizeof(uint64_t), MSG_WAITALL) != sizeof(uint64_t))
+	gnutlsretval = recv(sock, (char *) &size, sizeof(uint64_t), MSG_WAITALL);
+	if (gnutlsretval != sizeof(uint64_t))
 	{
-		SOCKERROR("recv()");
+		//try again because some data sent before the error
+		//was raised on the socket
+		if (recv(sock, (char *) &size, sizeof(uint64_t) - gnutlsretval, MSG_WAITALL) != ((ssize_t)(sizeof(uint64_t) - gnutlsretval)))
+		{
+			SOCKERROR("recv()");
+		}
+		//FUCKING WHAT HOW THE FUCK DID YOU GET HERE!?!?!?!?
+		//I GUESS WE KEEP GOING!
 	}
 	#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 	size = __builtin_bswap64(size);
